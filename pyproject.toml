@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tes-pipeline"
+version = "0.1.0"
+description = "Daily Tes worksheet generation pipeline running on Google Cloud Run."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Arham Mahmood Abbasi", email = "arhamabbasi915@gmail.com" },
+]
+keywords = ["education", "worksheets", "gemini", "google-cloud-run", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Education",
+]
+dependencies = [
+    "google-generativeai>=0.8.3,<0.9",
+    "google-cloud-storage>=2.18,<3",
+    "google-api-python-client>=2.149,<3",
+    "google-auth>=2.35,<3",
+    "google-auth-oauthlib>=1.2,<2",
+    "google-auth-httplib2>=0.2,<0.3",
+    "requests>=2.32,<3",
+    "weasyprint>=62.3,<64",
+    "reportlab>=4.2,<5",
+    "pillow>=11.0,<12",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-mock>=3.14,<4",
+    "ruff>=0.8,<1",
+    "pre-commit>=4.0,<5",
+]
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
+    "RUF", # ruff-specific
+]
+# Line length is handled by ruff format; do not double-report.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # asserts are fine in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
