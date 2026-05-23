@@ -86,7 +86,7 @@ Pre-1.0. The repo is being built in phases — see commits on `main` for
 progress.
 
 - [x] Phase 0 — Repo bootstrap and security baseline
-- [ ] Phase 1 — Domain primitives (personas, config, utils, validator)
+- [x] Phase 1 — Domain primitives (personas, config, utils, validator)
 - [ ] Phase 2 — Content generation (Gemini-backed)
 - [ ] Phase 3 — Artifact builders (image, PDF, packager)
 - [ ] Phase 4 — Cloud I/O (GCS history, Drive, Gmail)
