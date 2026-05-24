@@ -88,7 +88,7 @@ progress.
 - [x] Phase 0 — Repo bootstrap and security baseline
 - [x] Phase 1 — Domain primitives (personas, config, utils, validator)
 - [x] Phase 2 — Content generation (Gemini-backed)
-- [ ] Phase 3 — Artifact builders (image, PDF, packager)
+- [x] Phase 3 — Artifact builders (image, PDF, packager)
 - [ ] Phase 4 — Cloud I/O (GCS history, Drive, Gmail)
 - [ ] Phase 5 — Orchestration
 - [ ] Phase 6 — Containerization and GCP deployment
