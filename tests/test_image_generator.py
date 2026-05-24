@@ -19,12 +19,30 @@ from pipeline import image_generator
 
 @pytest.fixture
 def _hf_key(monkeypatch):
+    """HF enabled, Pexels disabled — exercises the HF tier in isolation."""
     monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_test_key")
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
 
 @pytest.fixture
-def _no_hf_key(monkeypatch):
+def _pexels_key(monkeypatch):
+    """Pexels enabled, HF disabled — exercises the Pexels tier in isolation."""
     monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels_test_key")
+
+
+@pytest.fixture
+def _both_image_keys(monkeypatch):
+    """Both HF and Pexels enabled — exercises the HF→Pexels chain."""
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_test_key")
+    monkeypatch.setenv("PEXELS_API_KEY", "pexels_test_key")
+
+
+@pytest.fixture
+def _no_image_keys(monkeypatch):
+    """No keys — exercises the Pillow fallback in isolation."""
+    monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -103,11 +121,13 @@ def test_persistent_failure_falls_back_to_pillow(_hf_key, _no_sleep, mocker):
     Image.open(io.BytesIO(out)).verify()
 
 
-def test_no_hf_key_uses_fallback_directly(_no_hf_key, _no_sleep, mocker):
-    """If HUGGINGFACE_API_KEY is unset we skip the network call entirely."""
+def test_no_keys_uses_pillow_fallback_directly(_no_image_keys, _no_sleep, mocker):
+    """Without any image API keys, neither network call happens."""
     post = mocker.patch("pipeline.image_generator.requests.post")
+    get = mocker.patch("pipeline.image_generator.requests.get")
     out = image_generator.generate_cover_image("science", "Plants")
     post.assert_not_called()
+    get.assert_not_called()
     Image.open(io.BytesIO(out)).verify()
 
 
@@ -155,3 +175,129 @@ def test_unknown_subject_at_top_level_still_succeeds(_hf_key, _no_sleep, mocker)
     mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_ok())
     out = image_generator.generate_cover_image("history", "Topic")
     Image.open(io.BytesIO(out)).verify()
+
+
+# ---- Pexels tier ---------------------------------------------------------
+
+
+def _pexels_search_ok(
+    image_url: str = "https://images.pexels.com/photos/123/test.jpg",
+) -> MagicMock:
+    """Mock a Pexels /v1/search response containing one photo."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"photos": [{"src": {"large": image_url}}]}
+    return resp
+
+
+def _pexels_image_ok(image_bytes: bytes | None = None) -> MagicMock:
+    """Mock the download of the actual image URL Pexels returned."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.content = image_bytes or _png_bytes()
+    return resp
+
+
+def _pexels_search_empty() -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"photos": []}
+    return resp
+
+
+def test_pexels_used_when_only_pexels_key_set(_pexels_key, _no_sleep, mocker):
+    """No HF key, but Pexels key present → Pexels tier returns an image."""
+    get = mocker.patch(
+        "pipeline.image_generator.requests.get",
+        side_effect=[_pexels_search_ok(), _pexels_image_ok()],
+    )
+    out = image_generator.generate_cover_image("science", "Photosynthesis")
+    Image.open(io.BytesIO(out)).verify()
+    # Pexels makes two HTTPs calls: search, then image fetch.
+    assert get.call_count == 2
+
+
+def test_pexels_search_includes_authorization_header(_pexels_key, _no_sleep, mocker):
+    get = mocker.patch(
+        "pipeline.image_generator.requests.get",
+        side_effect=[_pexels_search_ok(), _pexels_image_ok()],
+    )
+    image_generator.generate_cover_image("science", "Plants")
+    search_headers = get.call_args_list[0].kwargs["headers"]
+    assert search_headers["Authorization"] == "pexels_test_key"
+
+
+def test_pexels_search_query_includes_topic(_pexels_key, _no_sleep, mocker):
+    get = mocker.patch(
+        "pipeline.image_generator.requests.get",
+        side_effect=[_pexels_search_ok(), _pexels_image_ok()],
+    )
+    image_generator.generate_cover_image("science", "Photosynthesis")
+    search_params = get.call_args_list[0].kwargs["params"]
+    assert "Photosynthesis" in search_params["query"]
+
+
+def test_pexels_empty_results_falls_back_to_pillow(_pexels_key, _no_sleep, mocker):
+    mocker.patch(
+        "pipeline.image_generator.requests.get",
+        return_value=_pexels_search_empty(),
+    )
+    out = image_generator.generate_cover_image("science", "Plants")
+    # Pillow fallback still returns a valid PNG.
+    Image.open(io.BytesIO(out)).verify()
+
+
+def test_pexels_network_error_falls_back_to_pillow(_pexels_key, _no_sleep, mocker):
+    import requests as _r
+
+    mocker.patch(
+        "pipeline.image_generator.requests.get",
+        side_effect=_r.exceptions.RequestException("dns fail"),
+    )
+    out = image_generator.generate_cover_image("science", "Plants")
+    Image.open(io.BytesIO(out)).verify()
+
+
+# ---- three-tier chain ----------------------------------------------------
+
+
+def test_hf_failure_then_pexels_succeeds(_both_image_keys, _no_sleep, mocker):
+    """HF returns 500, Pexels returns an image — caller gets the Pexels image."""
+    mocker.patch(
+        "pipeline.image_generator.requests.post",
+        return_value=_hf_error(500),
+    )
+    mocker.patch(
+        "pipeline.image_generator.requests.get",
+        side_effect=[_pexels_search_ok(), _pexels_image_ok()],
+    )
+    out = image_generator.generate_cover_image(
+        "science", "Plants", max_retries=1, initial_delay_seconds=0.0
+    )
+    Image.open(io.BytesIO(out)).verify()
+
+
+def test_hf_and_pexels_both_fail_uses_pillow(_both_image_keys, _no_sleep, mocker):
+    mocker.patch(
+        "pipeline.image_generator.requests.post",
+        return_value=_hf_error(500),
+    )
+    mocker.patch(
+        "pipeline.image_generator.requests.get",
+        return_value=_pexels_search_empty(),
+    )
+    out = image_generator.generate_cover_image(
+        "science", "Plants", max_retries=1, initial_delay_seconds=0.0
+    )
+    Image.open(io.BytesIO(out)).verify()
+
+
+def test_hf_success_does_not_call_pexels(_both_image_keys, _no_sleep, mocker):
+    """When HF succeeds, the Pexels tier must not be called (no wasted quota)."""
+    mocker.patch(
+        "pipeline.image_generator.requests.post",
+        return_value=_hf_ok(),
+    )
+    get = mocker.patch("pipeline.image_generator.requests.get")
+    image_generator.generate_cover_image("science", "Plants")
+    get.assert_not_called()

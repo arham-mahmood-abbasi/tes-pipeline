@@ -57,6 +57,10 @@ def get_huggingface_api_key() -> str:
     return os.environ.get("HUGGINGFACE_API_KEY", "")
 
 
+def get_pexels_api_key() -> str:
+    return os.environ.get("PEXELS_API_KEY", "")
+
+
 # ---- Google Cloud --------------------------------------------------------
 
 
