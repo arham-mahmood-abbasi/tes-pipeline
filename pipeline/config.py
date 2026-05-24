@@ -91,6 +91,11 @@ def get_gmail_recipient() -> str:
     return os.environ.get("GMAIL_RECIPIENT", "")
 
 
+def get_gmail_app_password() -> str:
+    """Gmail SMTP app password (16 chars). See Google Account → Security → App passwords."""
+    return os.environ.get("GMAIL_APP_PASSWORD", "")
+
+
 # ---- Pricing -------------------------------------------------------------
 
 
