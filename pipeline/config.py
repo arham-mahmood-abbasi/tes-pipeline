@@ -68,14 +68,6 @@ def get_gcs_bucket() -> str:
     return os.environ.get("GCS_BUCKET", "")
 
 
-def get_drive_folder_id() -> str:
-    return os.environ.get("DRIVE_FOLDER_ID", "")
-
-
-def get_drive_archive_folder_id() -> str:
-    return os.environ.get("DRIVE_ARCHIVE_FOLDER_ID", "")
-
-
 def get_google_application_credentials() -> str:
     return os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 

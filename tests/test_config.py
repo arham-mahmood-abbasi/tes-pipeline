@@ -81,11 +81,6 @@ def test_get_gcs_bucket_returns_env_value(monkeypatch):
     assert config.get_gcs_bucket() == "my-bucket"
 
 
-def test_get_drive_folder_id_returns_env_value(monkeypatch):
-    monkeypatch.setenv("DRIVE_FOLDER_ID", "abc123")
-    assert config.get_drive_folder_id() == "abc123"
-
-
 def test_get_pexels_api_key_returns_env_value(monkeypatch):
     monkeypatch.setenv("PEXELS_API_KEY", "pexels-secret")
     assert config.get_pexels_api_key() == "pexels-secret"
