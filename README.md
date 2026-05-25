@@ -89,8 +89,8 @@ progress.
 - [x] Phase 1 — Domain primitives (personas, config, utils, validator)
 - [x] Phase 2 — Content generation (Gemini-backed)
 - [x] Phase 3 — Artifact builders (image, PDF, packager)
-- [x] Phase 4 — Cloud I/O (GCS history, Drive, Gmail)
-- [ ] Phase 5 — Orchestration
+- [x] Phase 4 — Cloud I/O → local-filesystem (GCS swap-out documented in history)
+- [x] Phase 5 — Orchestration
 - [ ] Phase 6 — Containerization and GCP deployment
 
 ## Licence
