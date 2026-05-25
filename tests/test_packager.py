@@ -46,7 +46,6 @@ def _build(tmp_path: Path, **overrides) -> Path:
         "cover_png": _cover_png(),
         "format_profile": 0,
         "model_name": "gemini-2.5-flash",
-        "published_count": 0,
         "date": "2026-05-10",
         "output_dir": tmp_path,
     }
@@ -150,21 +149,21 @@ def test_tags_json_resource_type_is_worksheet(tmp_path):
     assert tags["resource_type"] == "Worksheet"
 
 
-# ---- pricing (spec §11) --------------------------------------------------
+# ---- pricing -------------------------------------------------------------
 
 
-def test_pricing_is_free_when_published_count_below_threshold(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAUNCH_FREE_COUNT", "30")
+def test_pricing_uses_paid_price_gbp_directly(tmp_path, monkeypatch):
+    """Auto-tiered pricing was dropped with cloud storage; user sets price directly."""
     monkeypatch.setenv("PAID_PRICE_GBP", "2.50")
-    tags = json.loads(zipfile.ZipFile(_build(tmp_path, published_count=10)).read("tags.json"))
-    assert tags["price_gbp"] == 0.0
-
-
-def test_pricing_is_paid_when_published_count_at_threshold(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAUNCH_FREE_COUNT", "30")
-    monkeypatch.setenv("PAID_PRICE_GBP", "2.50")
-    tags = json.loads(zipfile.ZipFile(_build(tmp_path, published_count=30)).read("tags.json"))
+    tags = json.loads(zipfile.ZipFile(_build(tmp_path)).read("tags.json"))
     assert tags["price_gbp"] == 2.50
+
+
+def test_pricing_defaults_to_zero(tmp_path, monkeypatch):
+    """``PAID_PRICE_GBP=0.0`` lets the user start free without changing code."""
+    monkeypatch.setenv("PAID_PRICE_GBP", "0.0")
+    tags = json.loads(zipfile.ZipFile(_build(tmp_path)).read("tags.json"))
+    assert tags["price_gbp"] == 0.0
 
 
 # ---- description & cover --------------------------------------------------

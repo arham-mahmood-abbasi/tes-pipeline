@@ -1,73 +1,63 @@
-"""GCS-backed topic-history store.
+"""Local-filesystem topic-history store.
 
-Reads are non-fatal: if the blob is missing, malformed, or GCS is down, we
-return an empty history dict and let the day proceed without topic-exclusion
-(spec §12 graceful degradation). Writes do raise — losing the day's topics
-silently would let the same topic come up again tomorrow.
+Originally backed by GCS; switched to a plain JSON file on disk after we
+moved off cloud storage. The orchestrator passes the file path explicitly
+(usually ``./state/topic_history.json``) so this module has no opinion on
+where state lives, just how it's shaped.
+
+Reads are non-fatal: missing file or malformed JSON returns an empty dict
+and the day proceeds without topic-exclusion. Writes raise — losing the
+day's topics silently would let them repeat tomorrow.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
-
-try:
-    from google.cloud import storage  # type: ignore[attr-defined]
-
-    _GCS_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only when google-cloud-storage absent
-    _GCS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
-_BLOB_NAME = "topic_history.json"
 _MAX_HISTORY_PER_SUBJECT = 60
 
 
 class HistoryStoreError(RuntimeError):
-    """Raised when the GCS write fails or the library is unavailable."""
+    """Raised when the history file cannot be written."""
 
 
-def load_history(bucket_name: str) -> dict[str, list[dict[str, str]]]:
+def load_history(file_path: Path) -> dict[str, list[dict[str, str]]]:
     """Return ``{subject: [{topic, date}, ...]}``; never raises.
 
-    Missing blob → empty dict. Network/parse error → empty dict with warning.
+    Missing file → ``{}``. Malformed file → ``{}`` with a warning.
     """
-    if not _GCS_AVAILABLE:
-        raise HistoryStoreError("google-cloud-storage is not installed.")
-
+    if not file_path.exists():
+        logger.info("History file not yet present at %s; starting fresh.", file_path)
+        return {}
     try:
-        blob = _get_blob(bucket_name)
-        if not blob.exists():
-            logger.info("topic_history.json not yet present in %s; starting fresh.", bucket_name)
-            return {}
-        return _parse(blob.download_as_text())
+        return _parse(file_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Could not load topic history (%s); continuing without exclusion.", exc)
         return {}
 
 
-def append_today(bucket_name: str, subject: str, topic: str, date: str) -> None:
+def append_today(file_path: Path, subject: str, topic: str, date: str) -> None:
     """Prepend ``{topic, date}`` to ``history[subject]`` and persist.
 
-    Trims to the most-recent ``60`` entries per subject. Raises
-    :class:`HistoryStoreError` on write failure so the orchestrator can log
-    it loudly — silent dedup loss would let topics repeat the next day.
+    Trims to the most-recent ``60`` entries per subject. Creates parent
+    directories on demand. Raises :class:`HistoryStoreError` on write
+    failure so the orchestrator can log it loudly.
     """
-    if not _GCS_AVAILABLE:
-        raise HistoryStoreError("google-cloud-storage is not installed.")
-
-    blob = _get_blob(bucket_name)
-    history = _load_existing(blob)
+    history = _load_existing(file_path)
 
     subject_entries = history.get(subject, [])
     subject_entries.insert(0, {"topic": topic, "date": date})
     history[subject] = subject_entries[:_MAX_HISTORY_PER_SUBJECT]
 
     try:
-        blob.upload_from_string(json.dumps(history, indent=2), content_type="application/json")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
     except Exception as exc:
         raise HistoryStoreError(f"failed to write topic history: {exc}") from exc
 
@@ -75,30 +65,20 @@ def append_today(bucket_name: str, subject: str, topic: str, date: str) -> None:
 # ---- internal helpers ----------------------------------------------------
 
 
-def _get_client() -> Any:
-    """Construct a GCS client. Patched in tests."""
-    return storage.Client()
-
-
-def _get_blob(bucket_name: str) -> Any:
-    client = _get_client()
-    return client.bucket(bucket_name).blob(_BLOB_NAME)
-
-
-def _load_existing(blob: Any) -> dict[str, list[dict[str, str]]]:
-    if not blob.exists():
+def _load_existing(file_path: Path) -> dict[str, list[dict[str, str]]]:
+    if not file_path.exists():
         return {}
     try:
-        return _parse(blob.download_as_text())
+        return _parse(file_path.read_text(encoding="utf-8"))
     except Exception:
-        logger.warning("Existing topic_history.json was malformed; replacing with fresh write.")
+        logger.warning("Existing history file was malformed; replacing with a fresh write.")
         return {}
 
 
 def _parse(raw: str) -> dict[str, list[dict[str, str]]]:
-    """Parse the JSON payload; returns ``{}`` on any decode error."""
+    """Parse JSON; return ``{}`` if not a dict at the root or decode fails."""
     try:
-        data = json.loads(raw)
+        data: Any = json.loads(raw)
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}

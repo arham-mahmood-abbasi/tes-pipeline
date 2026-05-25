@@ -6,6 +6,7 @@ SMTP is mocked at ``smtplib.SMTP``; no network calls happen.
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +34,6 @@ def _success(subject: str = "Science", topic: str = "Photosynthesis") -> dict:
         "subject": subject,
         "topic": topic,
         "grade_label": "Year 6",
-        "drive_url": "https://drive.example/abc",
     }
 
 
@@ -85,7 +85,7 @@ def test_all_failure_subject_signals_total_failure(_gmail_env, _mock_smtp):
 # ---- body content --------------------------------------------------------
 
 
-def test_success_body_lists_each_worksheet_with_drive_url(_gmail_env, _mock_smtp):
+def test_success_body_lists_each_worksheet(_gmail_env, _mock_smtp):
     _, instance = _mock_smtp
     gmail_client.send_summary(
         success_list=[
@@ -99,7 +99,6 @@ def test_success_body_lists_each_worksheet_with_drive_url(_gmail_env, _mock_smtp
     body = instance.send_message.call_args.args[0].get_content()
     assert "Photosynthesis" in body
     assert "Fractions" in body
-    assert "https://drive.example/abc" in body
 
 
 def test_partial_body_lists_failures_with_reason(_gmail_env, _mock_smtp):
@@ -178,3 +177,78 @@ def test_raises_when_smtp_fails(_gmail_env, _mock_smtp):
         gmail_client.send_summary(
             success_list=[_success()], failure_list=[], elapsed=timedelta(0), date="2026-05-10"
         )
+
+
+# ---- attachments ---------------------------------------------------------
+
+
+def _make_zip(tmp_path: Path, name: str, payload: bytes = b"PK\x03\x04 fake zip") -> Path:
+    p = tmp_path / name
+    p.write_bytes(payload)
+    return p
+
+
+def test_attachments_are_added_to_message(_gmail_env, _mock_smtp, tmp_path):
+    _, instance = _mock_smtp
+    zips = [_make_zip(tmp_path, "a.zip"), _make_zip(tmp_path, "b.zip")]
+
+    gmail_client.send_summary(
+        success_list=[_success()],
+        failure_list=[],
+        elapsed=timedelta(0),
+        date="2026-05-10",
+        attachments=zips,
+    )
+
+    msg = instance.send_message.call_args.args[0]
+    attached_filenames = {part.get_filename() for part in msg.iter_attachments()}
+    assert attached_filenames == {"a.zip", "b.zip"}
+
+
+def test_attachments_use_application_zip_mime(_gmail_env, _mock_smtp, tmp_path):
+    _, instance = _mock_smtp
+    z = _make_zip(tmp_path, "x.zip")
+
+    gmail_client.send_summary(
+        success_list=[_success()],
+        failure_list=[],
+        elapsed=timedelta(0),
+        date="2026-05-10",
+        attachments=[z],
+    )
+
+    msg = instance.send_message.call_args.args[0]
+    attachment = next(msg.iter_attachments())
+    assert attachment.get_content_type() == "application/zip"
+
+
+def test_missing_attachment_files_are_skipped_with_warning(_gmail_env, _mock_smtp, tmp_path):
+    """A missing path shouldn't crash send — just log and skip."""
+    _, instance = _mock_smtp
+    real = _make_zip(tmp_path, "real.zip")
+    missing = tmp_path / "nope.zip"  # never created
+
+    gmail_client.send_summary(
+        success_list=[_success()],
+        failure_list=[],
+        elapsed=timedelta(0),
+        date="2026-05-10",
+        attachments=[real, missing],
+    )
+
+    msg = instance.send_message.call_args.args[0]
+    attached_filenames = {part.get_filename() for part in msg.iter_attachments()}
+    assert attached_filenames == {"real.zip"}
+
+
+def test_no_attachments_when_argument_omitted(_gmail_env, _mock_smtp):
+    """Backward-compat: callers that don't pass attachments still work."""
+    _, instance = _mock_smtp
+    gmail_client.send_summary(
+        success_list=[_success()],
+        failure_list=[],
+        elapsed=timedelta(0),
+        date="2026-05-10",
+    )
+    msg = instance.send_message.call_args.args[0]
+    assert list(msg.iter_attachments()) == []

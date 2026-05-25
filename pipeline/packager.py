@@ -35,7 +35,6 @@ def build_package(
     cover_png: bytes,
     format_profile: int,
     model_name: str,
-    published_count: int,
     date: str,
     output_dir: Path,
 ) -> Path:
@@ -64,7 +63,6 @@ def build_package(
         content=content,
         format_profile=format_profile,
         model_name=model_name,
-        published_count=published_count,
     )
 
     zip_filename = utils.build_zip_filename(
@@ -109,14 +107,11 @@ def _build_tags_payload(
     content: dict[str, Any],
     format_profile: int,
     model_name: str,
-    published_count: int,
 ) -> dict[str, Any]:
     subject_cap = subject.capitalize()
     grade_label = _grade_label(grade, market)
 
-    price_gbp = (
-        0.0 if published_count < config.get_launch_free_count() else config.get_paid_price_gbp()
-    )
+    price_gbp = config.get_paid_price_gbp()
 
     return {
         "title": title,

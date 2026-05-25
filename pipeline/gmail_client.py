@@ -16,6 +16,7 @@ import logging
 import smtplib
 from datetime import timedelta
 from email.message import EmailMessage
+from pathlib import Path
 from typing import Any
 
 from pipeline import config
@@ -37,11 +38,14 @@ def send_summary(
     failure_list: list[dict[str, Any]],
     elapsed: timedelta,
     date: str,
+    attachments: list[Path] | None = None,
 ) -> None:
-    """Send the daily summary email.
+    """Send the daily summary email, optionally with worksheet ZIPs attached.
 
-    ``success_list`` entries: ``{subject, topic, grade_label, drive_url}``.
+    ``success_list`` entries: ``{subject, topic, grade_label}``.
     ``failure_list`` entries: ``{subject, reason}``.
+    ``attachments``: paths to local files to attach (typically the three
+    daily ZIPs). Total payload must fit Gmail's 25 MB cap.
     """
     sender = config.get_gmail_sender()
     recipient = config.get_gmail_recipient()
@@ -57,6 +61,7 @@ def send_summary(
         elapsed=elapsed,
         date=date,
     )
+    _attach_files(message, attachments or [])
 
     try:
         with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT) as smtp:
@@ -65,6 +70,20 @@ def send_summary(
             smtp.send_message(message)
     except Exception as exc:
         raise GmailSendError(f"SMTP send failed: {exc}") from exc
+
+
+def _attach_files(message: EmailMessage, attachments: list[Path]) -> None:
+    """Attach each file as application/zip. Skips silently if a file is missing."""
+    for path in attachments:
+        if not path.exists():
+            logger.warning("Skipping attachment %s (file not found).", path)
+            continue
+        message.add_attachment(
+            path.read_bytes(),
+            maintype="application",
+            subtype="zip",
+            filename=path.name,
+        )
 
 
 # ---- templating ----------------------------------------------------------
@@ -150,8 +169,7 @@ def _format_success_list(items: list[dict[str, Any]]) -> str:
         subject = item.get("subject", "?")
         grade = item.get("grade_label", "")
         topic = item.get("topic", "?")
-        url = item.get("drive_url", "")
-        lines.append(f"{i}. {subject} · {grade} · {topic} — {url}")
+        lines.append(f"{i}. {subject} · {grade} · {topic}")
     return "\n".join(lines)
 
 

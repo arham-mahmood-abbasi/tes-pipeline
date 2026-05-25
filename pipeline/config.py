@@ -64,12 +64,14 @@ def get_pexels_api_key() -> str:
 # ---- Google Cloud --------------------------------------------------------
 
 
-def get_gcs_bucket() -> str:
-    return os.environ.get("GCS_BUCKET", "")
+def get_history_file_path() -> str:
+    """Local path to the topic-history JSON. Defaults to ``./state/topic_history.json``."""
+    return os.environ.get("HISTORY_FILE_PATH", "./state/topic_history.json")
 
 
-def get_google_application_credentials() -> str:
-    return os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+def get_output_dir() -> str:
+    """Local directory where the orchestrator writes daily ZIPs. Defaults to ``./output``."""
+    return os.environ.get("OUTPUT_DIR", "./output")
 
 
 # ---- Gmail ---------------------------------------------------------------
@@ -91,9 +93,11 @@ def get_gmail_app_password() -> str:
 # ---- Pricing -------------------------------------------------------------
 
 
-def get_launch_free_count() -> int:
-    return int(os.environ.get("LAUNCH_FREE_COUNT", "30"))
-
-
 def get_paid_price_gbp() -> float:
-    return float(os.environ.get("PAID_PRICE_GBP", "2.50"))
+    """Price written into every worksheet's tags.json.
+
+    Defaults to ``0.0`` (free). Change to (e.g.) ``2.50`` when you're ready
+    to start charging on Tes. Auto-tiered pricing was dropped along with
+    cloud storage — there's no longer a cheap way to count published days.
+    """
+    return float(os.environ.get("PAID_PRICE_GBP", "0.0"))

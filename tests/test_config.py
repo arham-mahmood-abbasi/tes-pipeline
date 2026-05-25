@@ -58,27 +58,33 @@ def test_get_gemini_fallback_model_uses_env_when_set(monkeypatch):
 # ---- pricing -------------------------------------------------------------
 
 
-def test_get_launch_free_count_defaults_to_30(monkeypatch):
-    monkeypatch.delenv("LAUNCH_FREE_COUNT", raising=False)
-    assert config.get_launch_free_count() == 30
-
-
-def test_get_launch_free_count_reads_env(monkeypatch):
-    monkeypatch.setenv("LAUNCH_FREE_COUNT", "42")
-    assert config.get_launch_free_count() == 42
-
-
-def test_get_paid_price_gbp_defaults_to_2_50(monkeypatch):
+def test_get_paid_price_gbp_defaults_to_zero(monkeypatch):
+    """Default is free; user opts in to charging by setting the env var."""
     monkeypatch.delenv("PAID_PRICE_GBP", raising=False)
+    assert config.get_paid_price_gbp() == 0.0
+
+
+def test_get_paid_price_gbp_reads_env(monkeypatch):
+    monkeypatch.setenv("PAID_PRICE_GBP", "2.50")
     assert config.get_paid_price_gbp() == 2.50
 
 
-# ---- google cloud --------------------------------------------------------
+# ---- local-filesystem paths ----------------------------------------------
 
 
-def test_get_gcs_bucket_returns_env_value(monkeypatch):
-    monkeypatch.setenv("GCS_BUCKET", "my-bucket")
-    assert config.get_gcs_bucket() == "my-bucket"
+def test_get_history_file_path_default(monkeypatch):
+    monkeypatch.delenv("HISTORY_FILE_PATH", raising=False)
+    assert config.get_history_file_path() == "./state/topic_history.json"
+
+
+def test_get_history_file_path_reads_env(monkeypatch):
+    monkeypatch.setenv("HISTORY_FILE_PATH", "/var/lib/tes/history.json")
+    assert config.get_history_file_path() == "/var/lib/tes/history.json"
+
+
+def test_get_output_dir_default(monkeypatch):
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    assert config.get_output_dir() == "./output"
 
 
 def test_get_pexels_api_key_returns_env_value(monkeypatch):
