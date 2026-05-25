@@ -91,7 +91,8 @@ progress.
 - [x] Phase 3 — Artifact builders (image, PDF, packager)
 - [x] Phase 4 — Cloud I/O → local-filesystem (GCS swap-out documented in history)
 - [x] Phase 5 — Orchestration
-- [ ] Phase 6 — Containerization and GCP deployment
+- [x] Phase 6 — GitHub Actions deployment + runbook
+      (see [`docs/operations.md`](docs/operations.md))
 
 ## Licence
 

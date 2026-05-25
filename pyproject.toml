@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tes-pipeline"
 version = "0.1.0"
-description = "Daily Tes worksheet generation pipeline running on Google Cloud Run."
+description = "Daily Tes worksheet generation pipeline, scheduled via GitHub Actions."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [
     { name = "Arham Mahmood Abbasi", email = "arhamabbasi915@gmail.com" },
 ]
-keywords = ["education", "worksheets", "gemini", "google-cloud-run", "automation"]
+keywords = ["education", "worksheets", "gemini", "automation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
@@ -21,12 +21,6 @@ classifiers = [
     "Topic :: Education",
 ]
 dependencies = [
-    "google-generativeai>=0.8.3,<0.9",
-    "google-cloud-storage>=2.18,<3",
-    "google-api-python-client>=2.149,<3",
-    "google-auth>=2.35,<3",
-    "google-auth-oauthlib>=1.2,<2",
-    "google-auth-httplib2>=0.2,<0.3",
     "requests>=2.32,<3",
     "weasyprint>=62.3,<64",
     "reportlab>=4.2,<5",
