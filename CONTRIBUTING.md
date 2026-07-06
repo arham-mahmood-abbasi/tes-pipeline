@@ -34,7 +34,7 @@ pytest
 ## Tests
 
 - Tests live in `tests/`.
-- External services (Gemini, Drive, Gmail, GCS, HuggingFace) are mocked.
+- External services (Gemini, Drive, Gmail, GCS, NVIDIA) are mocked.
 - Do not introduce tests that hit live APIs in CI. If you need one, mark it
   `@pytest.mark.live` and gate execution on an env var.
 

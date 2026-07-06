@@ -15,7 +15,7 @@ Once per day, on a Cloud Scheduler cron:
      format profile so daily output stays varied).
    - Validates the content (word counts, question structure, banned phrases,
      em/en-dash bans, market-appropriate spelling, SEO title rules).
-   - Generates a cover image (HuggingFace SDXL, with a Pillow fallback).
+   - Generates a cover image (NVIDIA FLUX.1, with Pexels and Pillow fallbacks).
    - Builds a PDF (WeasyPrint, with a ReportLab fallback).
    - Generates a 420–500 word Tes description.
    - Packages everything as a ZIP containing the PDF, cover image,
@@ -35,7 +35,7 @@ Cloud Scheduler (daily cron)
         ▼
 Cloud Run Job (Python 3.12, ~5–8 min per run)
    ├── Gemini      (topic, content, description)
-   ├── HF SDXL     (cover image, Pillow fallback)
+   ├── NVIDIA FLUX (cover image, Pexels/Pillow fallback)
    ├── WeasyPrint / ReportLab (PDF)
    └── Outputs:
          ├── Google Drive  (daily ZIPs)

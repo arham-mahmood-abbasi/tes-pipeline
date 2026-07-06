@@ -26,7 +26,8 @@ secret". Add each of these:
 | `GMAIL_RECIPIENT` | Yes | Where the daily email lands (can be the same as sender) |
 | `GMAIL_APP_PASSWORD` | Yes | https://myaccount.google.com/apppasswords (requires 2FA on) |
 | `FALLBACK_GEMINI_API_KEY` | Optional | A second Gemini key for rate-limit fallback |
-| `HUGGINGFACE_API_KEY` | Optional | https://huggingface.co/settings/tokens — for SDXL cover images |
+| `NVIDIA_API_KEY` | Optional | https://build.nvidia.com — FLUX.1 cover images (`nvapi-...`) |
+| `NVIDIA_IMAGE_MODEL` | Optional | Override the image model (default `black-forest-labs/flux.1-schnell`) |
 | `PEXELS_API_KEY` | Optional | https://www.pexels.com/api/ — for stock-photo cover fallback |
 
 ### 2. Enable workflow write permissions
@@ -56,7 +57,7 @@ If anything fails, see [Troubleshooting](#troubleshooting) below.
    - For each of Science / Math / English:
      - Picks a fresh topic (Gemini)
      - Generates worksheet content (Gemini)
-     - Generates cover image (HF → Pexels → Pillow fallback chain)
+     - Generates cover image (NVIDIA FLUX.1 → Pexels → Pillow fallback chain)
      - Generates a 420–500 word description (Gemini)
      - Builds the ZIP (worksheet.pdf + cover.png + description.txt + tags.json)
 3. **Email** lands in your inbox with the three ZIPs attached.
@@ -94,8 +95,8 @@ a permanent change, edit `DEFAULT_GRADE` in `pipeline/pipeline.py`.
 
 ### Rotate a secret
 
-1. Generate a new key from the relevant provider (Google AI Studio, HF,
-   Pexels, or new Gmail app password).
+1. Generate a new key from the relevant provider (Google AI Studio, NVIDIA
+   build.nvidia.com, Pexels, or new Gmail app password).
 2. GitHub → Settings → Secrets and variables → Actions → click the
    secret name → "Update".
 3. Next workflow run uses the new value automatically.
@@ -117,7 +118,7 @@ against this table:
 | `Gemini content call failed: rate limit` | Daily quota hit (rare on free tier) | Wait 24 hours; or add `FALLBACK_GEMINI_API_KEY` |
 | `Gemini returned invalid JSON` | Model output wasn't parseable (transient) | Re-run manually; if it persists, prompt may need tuning |
 | `WeasyPrint failed to render` | Cairo/Pango system dep issue | Should never happen on `ubuntu-latest`; if so, the apt-get step regressed |
-| `HF returned status 503` repeatedly | HuggingFace SDXL endpoint cold/down | Pexels or Pillow fallback will kick in automatically — check that you got an image either way |
+| `NVIDIA returned status 429/5xx` repeatedly | NVIDIA image endpoint throttled/down | Pexels or Pillow fallback kicks in automatically — check you got an image either way |
 
 ### Pipeline succeeded but no email arrived
 

@@ -60,7 +60,7 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           # Optional (image-source fallback chain)
           FALLBACK_GEMINI_API_KEY: ${{ secrets.FALLBACK_GEMINI_API_KEY }}
-          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           # Non-secret config — change these via the workflow file (or move to vars).
           MARKET: UK

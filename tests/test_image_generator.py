@@ -1,11 +1,13 @@
 """Tests for pipeline.image_generator.
 
-HF inference network is mocked at the ``requests.post`` boundary. The Pillow
-fallback is exercised for real (it's pure-Python and produces a small PNG).
+The NVIDIA image API is mocked at the ``requests.post`` boundary (it returns a
+base64 image inside JSON). The Pillow fallback is exercised for real (it's
+pure-Python and produces a small PNG).
 """
 
 from __future__ import annotations
 
+import base64
 import io
 from unittest.mock import MagicMock
 
@@ -18,30 +20,30 @@ from pipeline import image_generator
 
 
 @pytest.fixture
-def _hf_key(monkeypatch):
-    """HF enabled, Pexels disabled — exercises the HF tier in isolation."""
-    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_test_key")
+def _nvidia_key(monkeypatch):
+    """NVIDIA enabled, Pexels disabled — exercises the NVIDIA tier in isolation."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-key")
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
 
 @pytest.fixture
 def _pexels_key(monkeypatch):
-    """Pexels enabled, HF disabled — exercises the Pexels tier in isolation."""
-    monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    """Pexels enabled, NVIDIA disabled — exercises the Pexels tier in isolation."""
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.setenv("PEXELS_API_KEY", "pexels_test_key")
 
 
 @pytest.fixture
 def _both_image_keys(monkeypatch):
-    """Both HF and Pexels enabled — exercises the HF→Pexels chain."""
-    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_test_key")
+    """Both NVIDIA and Pexels enabled — exercises the NVIDIA→Pexels chain."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test-key")
     monkeypatch.setenv("PEXELS_API_KEY", "pexels_test_key")
 
 
 @pytest.fixture
 def _no_image_keys(monkeypatch):
     """No keys — exercises the Pillow fallback in isolation."""
-    monkeypatch.delenv("HUGGINGFACE_API_KEY", raising=False)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
 
 
@@ -58,61 +60,88 @@ def _png_bytes(size: tuple[int, int] = (64, 64), colour: str = "white") -> bytes
     return buf.getvalue()
 
 
-def _hf_ok(image_bytes: bytes | None = None) -> MagicMock:
+def _nvidia_ok(image_bytes: bytes | None = None, *, field: str = "artifacts") -> MagicMock:
+    """Mock a 200 NVIDIA genai response carrying a base64 image.
+
+    ``field`` selects which response shape to emit so we can prove the decoder
+    handles each of the known variants.
+    """
+    b64 = base64.b64encode(image_bytes or _png_bytes()).decode("ascii")
     resp = MagicMock()
     resp.status_code = 200
-    resp.content = image_bytes or _png_bytes()
+    if field == "artifacts":
+        resp.json.return_value = {"artifacts": [{"base64": b64}]}
+    elif field == "image":
+        resp.json.return_value = {"image": b64}
+    elif field == "data":
+        resp.json.return_value = {"data": [{"b64_json": b64}]}
+    else:  # pragma: no cover - guard
+        raise ValueError(field)
     return resp
 
 
-def _hf_error(status_code: int) -> MagicMock:
+def _nvidia_error(status_code: int) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
     resp.text = f"HTTP {status_code}"
-    resp.content = b""
+    resp.json.return_value = {}
     return resp
 
 
 # ---- happy path ----------------------------------------------------------
 
 
-def test_returns_png_bytes_on_hf_success(_hf_key, _no_sleep, mocker):
-    mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_ok())
+def test_returns_png_bytes_on_nvidia_success(_nvidia_key, _no_sleep, mocker):
+    mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok())
     out = image_generator.generate_cover_image("science", "Photosynthesis")
     assert isinstance(out, bytes)
     # The bytes should decode as an image.
     Image.open(io.BytesIO(out)).verify()
 
 
-def test_hf_call_includes_bearer_token(_hf_key, _no_sleep, mocker):
-    post = mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_ok())
+def test_nvidia_call_includes_bearer_token(_nvidia_key, _no_sleep, mocker):
+    post = mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok())
     image_generator.generate_cover_image("science", "Plants")
     headers = post.call_args.kwargs["headers"]
-    assert headers["Authorization"] == "Bearer hf_test_key"
+    assert headers["Authorization"] == "Bearer nvapi-test-key"
 
 
-def test_hf_call_includes_topic_in_prompt(_hf_key, _no_sleep, mocker):
-    post = mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_ok())
+def test_nvidia_call_includes_topic_in_prompt(_nvidia_key, _no_sleep, mocker):
+    post = mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok())
     image_generator.generate_cover_image("science", "Photosynthesis")
     payload = post.call_args.kwargs["json"]
-    assert "Photosynthesis" in payload["inputs"]
+    assert "Photosynthesis" in payload["prompt"]
+
+
+def test_nvidia_call_hits_flux_model_endpoint(_nvidia_key, _no_sleep, mocker):
+    post = mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok())
+    image_generator.generate_cover_image("science", "Plants")
+    url = post.call_args.args[0]
+    assert "ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell" in url
+
+
+@pytest.mark.parametrize("field", ["artifacts", "image", "data"])
+def test_nvidia_decoder_handles_each_response_shape(_nvidia_key, _no_sleep, mocker, field):
+    mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok(field=field))
+    out = image_generator.generate_cover_image("science", "Plants")
+    Image.open(io.BytesIO(out)).verify()
 
 
 # ---- retry / fallback ----------------------------------------------------
 
 
-def test_503_triggers_retry_then_succeeds(_hf_key, _no_sleep, mocker):
+def test_5xx_triggers_retry_then_succeeds(_nvidia_key, _no_sleep, mocker):
     post = mocker.patch(
         "pipeline.image_generator.requests.post",
-        side_effect=[_hf_error(503), _hf_ok()],
+        side_effect=[_nvidia_error(503), _nvidia_ok()],
     )
     out = image_generator.generate_cover_image("science", "Plants", initial_delay_seconds=0.0)
     assert isinstance(out, bytes)
     assert post.call_count == 2
 
 
-def test_persistent_failure_falls_back_to_pillow(_hf_key, _no_sleep, mocker):
-    mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_error(500))
+def test_persistent_failure_falls_back_to_pillow(_nvidia_key, _no_sleep, mocker):
+    mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_error(500))
     out = image_generator.generate_cover_image(
         "science", "Plants", max_retries=1, initial_delay_seconds=0.0
     )
@@ -131,7 +160,7 @@ def test_no_keys_uses_pillow_fallback_directly(_no_image_keys, _no_sleep, mocker
     Image.open(io.BytesIO(out)).verify()
 
 
-def test_network_exception_falls_back(_hf_key, _no_sleep, mocker):
+def test_network_exception_falls_back(_nvidia_key, _no_sleep, mocker):
     import requests
 
     mocker.patch(
@@ -170,9 +199,9 @@ def test_make_fallback_image_handles_unknown_subject():
 # ---- input validation ----------------------------------------------------
 
 
-def test_unknown_subject_at_top_level_still_succeeds(_hf_key, _no_sleep, mocker):
+def test_unknown_subject_at_top_level_still_succeeds(_nvidia_key, _no_sleep, mocker):
     """An unknown subject doesn't crash — the prompt template is generic enough."""
-    mocker.patch("pipeline.image_generator.requests.post", return_value=_hf_ok())
+    mocker.patch("pipeline.image_generator.requests.post", return_value=_nvidia_ok())
     out = image_generator.generate_cover_image("history", "Topic")
     Image.open(io.BytesIO(out)).verify()
 
@@ -206,7 +235,7 @@ def _pexels_search_empty() -> MagicMock:
 
 
 def test_pexels_used_when_only_pexels_key_set(_pexels_key, _no_sleep, mocker):
-    """No HF key, but Pexels key present → Pexels tier returns an image."""
+    """No NVIDIA key, but Pexels key present → Pexels tier returns an image."""
     get = mocker.patch(
         "pipeline.image_generator.requests.get",
         side_effect=[_pexels_search_ok(), _pexels_image_ok()],
@@ -261,11 +290,11 @@ def test_pexels_network_error_falls_back_to_pillow(_pexels_key, _no_sleep, mocke
 # ---- three-tier chain ----------------------------------------------------
 
 
-def test_hf_failure_then_pexels_succeeds(_both_image_keys, _no_sleep, mocker):
-    """HF returns 500, Pexels returns an image — caller gets the Pexels image."""
+def test_nvidia_failure_then_pexels_succeeds(_both_image_keys, _no_sleep, mocker):
+    """NVIDIA returns 500, Pexels returns an image — caller gets the Pexels image."""
     mocker.patch(
         "pipeline.image_generator.requests.post",
-        return_value=_hf_error(500),
+        return_value=_nvidia_error(500),
     )
     mocker.patch(
         "pipeline.image_generator.requests.get",
@@ -277,10 +306,10 @@ def test_hf_failure_then_pexels_succeeds(_both_image_keys, _no_sleep, mocker):
     Image.open(io.BytesIO(out)).verify()
 
 
-def test_hf_and_pexels_both_fail_uses_pillow(_both_image_keys, _no_sleep, mocker):
+def test_nvidia_and_pexels_both_fail_uses_pillow(_both_image_keys, _no_sleep, mocker):
     mocker.patch(
         "pipeline.image_generator.requests.post",
-        return_value=_hf_error(500),
+        return_value=_nvidia_error(500),
     )
     mocker.patch(
         "pipeline.image_generator.requests.get",
@@ -292,11 +321,11 @@ def test_hf_and_pexels_both_fail_uses_pillow(_both_image_keys, _no_sleep, mocker
     Image.open(io.BytesIO(out)).verify()
 
 
-def test_hf_success_does_not_call_pexels(_both_image_keys, _no_sleep, mocker):
-    """When HF succeeds, the Pexels tier must not be called (no wasted quota)."""
+def test_nvidia_success_does_not_call_pexels(_both_image_keys, _no_sleep, mocker):
+    """When NVIDIA succeeds, the Pexels tier must not be called (no wasted quota)."""
     mocker.patch(
         "pipeline.image_generator.requests.post",
-        return_value=_hf_ok(),
+        return_value=_nvidia_ok(),
     )
     get = mocker.patch("pipeline.image_generator.requests.get")
     image_generator.generate_cover_image("science", "Plants")

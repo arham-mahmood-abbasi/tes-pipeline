@@ -50,11 +50,17 @@ def get_gemini_fallback_model() -> str:
     return os.environ.get("GEMINI_FALLBACK_MODEL", get_gemini_model())
 
 
-# ---- HuggingFace ---------------------------------------------------------
+# ---- NVIDIA (cover images) ----------------------------------------------
 
 
-def get_huggingface_api_key() -> str:
-    return os.environ.get("HUGGINGFACE_API_KEY", "")
+def get_nvidia_api_key() -> str:
+    """API key for NVIDIA's hosted models (``nvapi-...``). Used for cover images."""
+    return os.environ.get("NVIDIA_API_KEY", "")
+
+
+def get_nvidia_image_model() -> str:
+    """NVIDIA genai image model id. Defaults to FLUX.1-schnell (fast, cheap)."""
+    return os.environ.get("NVIDIA_IMAGE_MODEL", "black-forest-labs/flux.1-schnell")
 
 
 def get_pexels_api_key() -> str:

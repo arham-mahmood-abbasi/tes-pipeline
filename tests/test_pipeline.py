@@ -1,6 +1,6 @@
 """Tests for pipeline.pipeline (the daily orchestrator).
 
-Every external boundary is mocked: Gemini, HuggingFace/Pexels, the PDF
+Every external boundary is mocked: Gemini, NVIDIA/Pexels, the PDF
 builders (via packager), Gmail SMTP, and the local-FS history store. The
 orchestrator's contract is what we test — it should:
 
