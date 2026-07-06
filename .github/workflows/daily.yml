@@ -69,7 +69,16 @@ jobs:
           OUTPUT_DIR: ./output
         run: |
           mkdir -p state output
+          set +e
           python -m pipeline.pipeline
+          code=$?
+          echo "pipeline exit code: $code"
+          # 0 = all subjects succeeded, 1 = partial success (still a good day,
+          # the email went out with whatever built), 2 = total failure. Only a
+          # total failure should fail the job.
+          if [ "$code" -ge 2 ]; then
+            exit "$code"
+          fi
 
       - name: Commit updated topic history
         # Run even if the pipeline exited with partial-failure (exit 1) so we

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from typing import Any
+
+from pipeline import content_generator
 
 try:
     from reportlab.lib.colors import HexColor
@@ -38,6 +41,46 @@ _SUBJECT_HEX: dict[str, str] = {
     "english": "#ff9800",
 }
 _DEFAULT_HEX = "#616161"
+
+# Same typed sections and label-stripping the WeasyPrint renderer uses, so the
+# fallback groups questions and de-duplicates option labels ("A) A") too.
+_QUESTION_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("mcq", "Multiple Choice"),
+    ("short", "Short Answer"),
+    ("truefalse", "True or False"),
+    ("fill", "Fill in the Blanks"),
+)
+_OPTION_LABEL_RE = re.compile(r"^\s*[(\[]?[A-Da-d][)\].:\-]\s+")
+
+
+def _strip_option_label(text: str) -> str:
+    return _OPTION_LABEL_RE.sub("", text).strip()
+
+
+def _ordered_questions(questions: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+    buckets: dict[str, list[dict[str, Any]]] = {qtype: [] for qtype, _ in _QUESTION_SECTIONS}
+    extras: list[tuple[str, dict[str, Any]]] = []
+    for q in questions:
+        qtype = content_generator.infer_question_type(q)
+        if qtype in buckets:
+            buckets[qtype].append(q)
+        else:  # pragma: no cover - defensive
+            extras.append((qtype, q))
+    ordered: list[tuple[str, dict[str, Any]]] = []
+    for qtype, _ in _QUESTION_SECTIONS:
+        ordered.extend((qtype, q) for q in buckets[qtype])
+    ordered.extend(extras)
+    return ordered
+
+
+def _format_answer(q: dict[str, Any]) -> str:
+    answer = str(q.get("answer", "")).strip()
+    options = q.get("options")
+    if options and len(answer) == 1 and answer.upper() in "ABCD":
+        idx = ord(answer.upper()) - 65
+        if 0 <= idx < len(options):
+            return f"{answer.upper()}) {_strip_option_label(str(options[idx]))}"
+    return answer
 
 
 class PDFBuildError(RuntimeError):
@@ -99,24 +142,37 @@ def _build_story(worksheet: dict[str, Any], cover_image_png: bytes | None) -> li
         story.append(Paragraph(concept_text, styles["body"]))
     story.append(Spacer(1, 0.3 * inch))
 
-    # ---- questions ----
+    # ---- questions (grouped by type) ----
     questions = worksheet.get("questions") or []
+    ordered = _ordered_questions(questions)
+    section_labels = dict(_QUESTION_SECTIONS)
     story.append(Paragraph("Questions", styles["section"]))
-    for i, q in enumerate(questions, start=1):
+    current_type: str | None = None
+    for i, (qtype, q) in enumerate(ordered, start=1):
+        if qtype != current_type:
+            current_type = qtype
+            story.append(Spacer(1, 0.12 * inch))
+            story.append(Paragraph(section_labels.get(qtype, "Questions"), styles["subsection"]))
         text = str(q.get("text", ""))
-        story.append(Spacer(1, 0.15 * inch))
+        story.append(Spacer(1, 0.1 * inch))
         story.append(Paragraph(f"<b>{i}.</b> {text}", styles["question"]))
-        options = q.get("options")
-        if options:
-            for j, opt in enumerate(options):
+        if qtype == "mcq":
+            for j, opt in enumerate(q.get("options") or []):
                 label = chr(65 + j)
-                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{label}) {opt}", styles["option"]))
+                choice = _strip_option_label(str(opt))
+                story.append(
+                    Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;{label}) {choice}", styles["option"])
+                )
+        elif qtype == "truefalse":
+            story.append(
+                Paragraph("&nbsp;&nbsp;&nbsp;&nbsp;True&nbsp;/&nbsp;False", styles["option"])
+            )
 
     # ---- answer key (separate page) ----
     story.append(PageBreak())
     story.append(Paragraph("Answer Key", styles["section"]))
-    for i, q in enumerate(questions, start=1):
-        answer = str(q.get("answer", ""))
+    for i, (_qtype, q) in enumerate(ordered, start=1):
+        answer = _format_answer(q)
         story.append(Paragraph(f"<b>{i}.</b> {answer}", styles["answer"]))
 
     return story
@@ -146,6 +202,13 @@ def _make_styles(primary: HexColor) -> dict[str, ParagraphStyle]:
             fontSize=20,
             textColor=primary,
             spaceAfter=10,
+        ),
+        "subsection": ParagraphStyle(
+            "Subsection",
+            parent=base["Heading3"],
+            fontSize=14,
+            textColor=primary,
+            spaceAfter=4,
         ),
         "body": ParagraphStyle(
             "Body",

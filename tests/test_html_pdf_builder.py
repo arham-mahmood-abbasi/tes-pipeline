@@ -241,3 +241,69 @@ def test_subject_palette_varies_per_subject(_mock_weasyprint):
     math_html = _mock_weasyprint.HTML.call_args.kwargs["string"]
     assert "#2196f3" in math_html  # math blue
     assert "#4caf50" not in math_html  # not the science green
+
+
+# ---- typed question sections + option-label de-duplication ---------------
+
+
+def _typed_worksheet() -> dict:
+    return {
+        "title": "Plants Worksheet | Year 6 Science",
+        "subject": "science",
+        "grade_label": "Year 6",
+        "concept": "Plants make food.",
+        "questions": [
+            {
+                "type": "mcq",
+                "text": "Which gas do plants take in?",
+                # Model mistakenly prefixed each option with its own letter.
+                "options": ["A) Oxygen", "B) Carbon dioxide", "C) Nitrogen", "D) Helium"],
+                "answer": "B",
+            },
+            {
+                "type": "short",
+                "text": "Name the green pigment.",
+                "options": None,
+                "answer": "Chlorophyll",
+            },
+            {"type": "truefalse", "text": "Roots absorb water.", "options": None, "answer": "True"},
+            {
+                "type": "fill",
+                "text": "Leaves make ____ using sunlight.",
+                "options": None,
+                "answer": "food",
+            },
+        ],
+    }
+
+
+def test_question_type_section_headers_rendered(_mock_weasyprint):
+    html_pdf_builder.build_html_pdf(_typed_worksheet(), cover_image_png=None)
+    html_doc = _mock_weasyprint.HTML.call_args.kwargs["string"]
+    for heading in ("Multiple Choice", "Short Answer", "True or False", "Fill in the Blanks"):
+        assert heading in html_doc
+
+
+def test_mcq_option_letter_prefix_is_stripped(_mock_weasyprint):
+    """The 'A) A' duplication: our A/B/C/D label must not sit on top of a
+    letter the model baked into the option text."""
+    html_pdf_builder.build_html_pdf(_typed_worksheet(), cover_image_png=None)
+    html_doc = _mock_weasyprint.HTML.call_args.kwargs["string"]
+    # The option text should read 'Oxygen', not 'A) Oxygen'.
+    assert "A) Oxygen" not in html_doc
+    assert "Oxygen" in html_doc
+
+
+def test_true_false_options_rendered(_mock_weasyprint):
+    html_pdf_builder.build_html_pdf(_typed_worksheet(), cover_image_png=None)
+    html_doc = _mock_weasyprint.HTML.call_args.kwargs["string"]
+    assert "ws-tf-option" in html_doc
+    assert ">True<" in html_doc
+    assert ">False<" in html_doc
+
+
+def test_answer_key_expands_mcq_letter_to_option_text(_mock_weasyprint):
+    html_pdf_builder.build_html_pdf(_typed_worksheet(), cover_image_png=None)
+    html_doc = _mock_weasyprint.HTML.call_args.kwargs["string"]
+    # Answer 'B' should expand to 'B) Carbon dioxide' (label stripped from source).
+    assert "B) Carbon dioxide" in html_doc

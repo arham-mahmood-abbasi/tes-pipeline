@@ -5,6 +5,29 @@ from __future__ import annotations
 from pipeline import validator
 
 
+def _questions() -> list[dict]:
+    """A full, valid bank: 10 of each of the four question types (40 total)."""
+    qs: list[dict] = []
+    for i in range(10):
+        qs.append(
+            {
+                "type": "mcq",
+                "text": f"MCQ {i}",
+                "options": ["First", "Second", "Third", "Fourth"],
+                "answer": "A",
+            }
+        )
+    for i in range(10):
+        qs.append({"type": "short", "text": f"Short {i}", "options": None, "answer": "Answer"})
+    for i in range(10):
+        qs.append({"type": "truefalse", "text": f"TF {i}", "options": None, "answer": "True"})
+    for i in range(10):
+        qs.append(
+            {"type": "fill", "text": f"Fill {i} ____ here", "options": None, "answer": "word"}
+        )
+    return qs
+
+
 def _clean_worksheet() -> dict:
     """A baseline worksheet that passes every check (used as the starting point
     that each failure-mode test then breaks in exactly one way)."""
@@ -13,10 +36,7 @@ def _clean_worksheet() -> dict:
         "keyword": "photosynthesis",
         "concept": " ".join(["concept"] * 200),  # 200 words; inside [130, 280]
         "description": " ".join(["description"] * 460),  # 460 words; inside [420, 500]
-        "questions": [
-            {"text": f"Question {i}", "options": ["A", "B", "C", "D"], "answer": "A"}
-            for i in range(6)  # 6 questions; inside [5, 8]
-        ],
+        "questions": _questions(),
     }
 
 
@@ -72,18 +92,27 @@ def test_concept_word_count_too_long_fails():
 # ---- question structure --------------------------------------------------
 
 
-def test_question_count_too_few_fails():
+def test_question_type_count_too_few_fails():
     ws = _clean_worksheet()
-    ws["questions"] = ws["questions"][:3]
-    r = validator.check_question_count(ws)
+    # Drop one MCQ so the mcq group has 9 instead of 10.
+    ws["questions"] = ws["questions"][1:]
+    r = validator.check_question_type_counts(ws)
     assert not r.passed
+    assert "mcq" in r.failed_check
 
 
-def test_question_count_too_many_fails():
+def test_question_type_count_too_many_fails():
     ws = _clean_worksheet()
-    ws["questions"] = ws["questions"] * 3  # 18 questions
-    r = validator.check_question_count(ws)
+    # Add an extra true/false so that group has 11.
+    ws["questions"].append({"type": "truefalse", "text": "extra", "answer": "False"})
+    r = validator.check_question_type_counts(ws)
     assert not r.passed
+    assert "truefalse" in r.failed_check
+
+
+def test_full_typed_bank_passes():
+    r = validator.check_question_type_counts(_clean_worksheet())
+    assert r.passed
 
 
 def test_mcq_with_wrong_option_count_fails():

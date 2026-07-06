@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pipeline import config, personas
+from pipeline import config, content_generator, personas
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,6 @@ Check = Callable[[Worksheet], ValidationResult]
 _EM_OR_EN_DASH_RE = re.compile("[–—]")  # noqa: RUF001
 _DESCRIPTION_RANGE = (420, 500)
 _CONCEPT_RANGE = (130, 280)
-_QUESTION_COUNT_RANGE = (5, 8)
 _MCQ_OPTION_COUNT = 4
 _TITLE_MAX_LEN = 70
 _MARKET_SPELLING_MIN_RATIO = 0.8
@@ -56,17 +55,22 @@ def check_concept_word_count(worksheet: Worksheet) -> ValidationResult:
     )
 
 
-def check_question_count(worksheet: Worksheet) -> ValidationResult:
-    qs = worksheet.get("questions", [])
-    count = len(qs)
-    lo, hi = _QUESTION_COUNT_RANGE
-    if lo <= count <= hi:
-        return ValidationResult(True)
-    return ValidationResult(
-        False,
-        f"question_count_in_range[{lo},{hi}]",
-        f"got {count} questions",
-    )
+def check_question_type_counts(worksheet: Worksheet) -> ValidationResult:
+    """Require exactly :data:`REQUIRED_PER_TYPE` questions of each of the four types."""
+    required = content_generator.REQUIRED_PER_TYPE
+    counts: dict[str, int] = dict.fromkeys(content_generator.QUESTION_TYPES, 0)
+    for q in worksheet.get("questions", []):
+        qtype = content_generator.infer_question_type(q)
+        if qtype in counts:
+            counts[qtype] += 1
+    for qtype in content_generator.QUESTION_TYPES:
+        if counts[qtype] != required:
+            return ValidationResult(
+                False,
+                f"question_type_count[{qtype}]",
+                f"{qtype}={counts[qtype]}, need {required}",
+            )
+    return ValidationResult(True)
 
 
 def check_mcq_options(worksheet: Worksheet) -> ValidationResult:
@@ -177,7 +181,7 @@ def check_title_starts_with_keyword(worksheet: Worksheet) -> ValidationResult:
 ALL_CHECKS: list[Check] = [
     check_description_word_count,
     check_concept_word_count,
-    check_question_count,
+    check_question_type_counts,
     check_mcq_options,
     check_answer_keys,
     check_no_banned_phrases,

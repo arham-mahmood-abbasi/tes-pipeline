@@ -21,6 +21,22 @@ import pytest
 from pipeline import pipeline
 
 
+def _valid_content() -> dict:
+    """Content that passes the content-only validator: 10 of each question type."""
+    questions: list[dict] = []
+    for _ in range(10):
+        questions.append(
+            {"type": "mcq", "text": "Q", "options": ["one", "two", "three", "four"], "answer": "A"}
+        )
+    for _ in range(10):
+        questions.append({"type": "short", "text": "Q", "options": None, "answer": "A"})
+    for _ in range(10):
+        questions.append({"type": "truefalse", "text": "Q", "options": None, "answer": "True"})
+    for _ in range(10):
+        questions.append({"type": "fill", "text": "Q ____", "options": None, "answer": "word"})
+    return {"concept": " ".join(["word"] * 200), "questions": questions}
+
+
 @pytest.fixture
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("MARKET", "UK")
@@ -47,12 +63,7 @@ def _mocks(mocker, _env, tmp_path):
         ),
         "generate_content": mocker.patch(
             "pipeline.pipeline.content_generator.generate_worksheet_content",
-            return_value={
-                "concept": " ".join(["word"] * 200),  # passes concept word count
-                "questions": [
-                    {"text": "Q", "options": ["A", "B", "C", "D"], "answer": "A"} for _ in range(6)
-                ],
-            },
+            return_value=_valid_content(),
         ),
         "generate_cover": mocker.patch(
             "pipeline.pipeline.image_generator.generate_cover_image",
@@ -107,13 +118,8 @@ def test_email_sent_with_attachments_for_each_success(_mocks):
 
 def test_regenerates_content_on_validator_failure(_mocks):
     """First two generations fail validation; third one succeeds."""
-    bad = {"concept": "too short", "questions": []}  # fails question_count AND concept
-    good = {
-        "concept": " ".join(["w"] * 200),
-        "questions": [
-            {"text": "Q", "options": ["A", "B", "C", "D"], "answer": "A"} for _ in range(6)
-        ],
-    }
+    bad = {"concept": "too short", "questions": []}  # fails type counts AND concept
+    good = _valid_content()
     # Each subject calls generate_content; for ONE subject we want 3 attempts.
     # Simplest: make all 3 subjects each retry once then succeed.
     _mocks["generate_content"].side_effect = [
@@ -132,12 +138,7 @@ def test_regenerates_content_on_validator_failure(_mocks):
 def test_subject_marked_failed_after_max_retries(_mocks):
     """All 3 attempts return invalid content → subject is reported as failed."""
     bad = {"concept": "too short", "questions": []}
-    good = {
-        "concept": " ".join(["w"] * 200),
-        "questions": [
-            {"text": "Q", "options": ["A", "B", "C", "D"], "answer": "A"} for _ in range(6)
-        ],
-    }
+    good = _valid_content()
     # science: 3 fails; math + english: succeed first try
     _mocks["generate_content"].side_effect = [bad, bad, bad, good, good]
 

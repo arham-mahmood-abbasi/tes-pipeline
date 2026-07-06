@@ -19,8 +19,18 @@ def _sample_payload() -> dict:
     return {
         "concept": "A short concept overview about the topic.",
         "questions": [
-            {"text": "What is X?", "options": ["A", "B", "C", "D"], "answer": "A"},
-            {"text": "Explain Y.", "options": None, "answer": "Sample explanation."},
+            {
+                "type": "mcq",
+                "text": "What is X?",
+                "options": ["First", "Second", "Third", "Fourth"],
+                "answer": "A",
+            },
+            {
+                "type": "short",
+                "text": "Explain Y.",
+                "options": None,
+                "answer": "Sample explanation.",
+            },
         ],
     }
 
@@ -145,6 +155,69 @@ def test_gemini_failure_raises(_uk, mocker):
     )
     with pytest.raises(content_generator.ContentGenerationError, match="rate limit"):
         content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+
+
+# ---- prompt requests the four-group question bank ------------------------
+
+
+def test_prompt_requests_forty_questions_across_four_types(_uk, mocker):
+    call = _mock_gemini(mocker)
+    content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+    prompt = call.call_args.args[0].lower()
+    assert "40 questions" in prompt
+    for token in ("mcq", "short", "truefalse", "fill"):
+        assert token in prompt
+
+
+def test_prompt_forbids_bare_letter_options(_uk, mocker):
+    """The old prompt showed options as ['A','B','C','D']; the new one bans that."""
+    call = _mock_gemini(mocker)
+    content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+    prompt = call.call_args.args[0].lower()
+    assert "bare letters" in prompt
+
+
+# ---- question normalisation ----------------------------------------------
+
+
+def test_questions_are_tagged_with_a_type(_uk, mocker):
+    payload = {
+        "concept": "c",
+        "questions": [
+            {"text": "mcq?", "options": ["one", "two", "three", "four"], "answer": "A"},
+            {"text": "free?", "options": None, "answer": "x"},
+        ],
+    }
+    _mock_gemini(mocker, payload)
+    out = content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+    assert out["questions"][0]["type"] == "mcq"  # inferred from having options
+    assert out["questions"][1]["type"] == "short"  # inferred from options=None
+
+
+def test_overshoot_is_trimmed_to_ten_per_type(_uk, mocker):
+    payload = {
+        "concept": "c",
+        "questions": [
+            {"type": "truefalse", "text": f"tf{i}", "options": None, "answer": "True"}
+            for i in range(13)
+        ],
+    }
+    _mock_gemini(mocker, payload)
+    out = content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+    tf = [q for q in out["questions"] if q["type"] == "truefalse"]
+    assert len(tf) == content_generator.REQUIRED_PER_TYPE
+
+
+def test_type_aliases_are_canonicalised(_uk, mocker):
+    payload = {
+        "concept": "c",
+        "questions": [
+            {"type": "Multiple Choice", "text": "q", "options": ["a", "b"], "answer": "A"}
+        ],
+    }
+    _mock_gemini(mocker, payload)
+    out = content_generator.generate_worksheet_content("science", "Plants", 6, 0)
+    assert out["questions"][0]["type"] == "mcq"
 
 
 # ---- format profile by day-of-year helper --------------------------------

@@ -19,7 +19,10 @@ from __future__ import annotations
 import base64
 import html
 import logging
+import re
 from typing import Any
+
+from pipeline import content_generator
 
 try:
     import weasyprint  # type: ignore[import-not-found]
@@ -27,6 +30,19 @@ except ImportError:  # pragma: no cover - exercised only when WeasyPrint absent
     weasyprint = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+# The four typed question groups, in presentation order, with their headings.
+_QUESTION_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("mcq", "Multiple Choice"),
+    ("short", "Short Answer"),
+    ("truefalse", "True or False"),
+    ("fill", "Fill in the Blanks"),
+)
+
+# Strips a leading option label the model may have baked into the option text
+# ("A) ", "A. ", "(B) ", "c - ") so it isn't rendered on top of our own A/B/C/D
+# marker — the source of the "A) A" duplication.
+_OPTION_LABEL_RE = re.compile(r"^\s*[(\[]?[A-Da-d][)\].:\-]\s+")
 
 
 # Subject → (primary, tint background, gradient darker shade).
@@ -206,39 +222,93 @@ def _render_meta_line() -> str:
 """
 
 
+def _ordered_questions(questions: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
+    """Group questions by type into presentation order.
+
+    Returns ``(type, question)`` pairs with the four typed groups first (in
+    :data:`_QUESTION_SECTIONS` order) and any unrecognised types appended after,
+    so both the question body and the answer key number them identically.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {qtype: [] for qtype, _ in _QUESTION_SECTIONS}
+    extras: list[tuple[str, dict[str, Any]]] = []
+    for q in questions:
+        qtype = content_generator.infer_question_type(q)
+        if qtype in buckets:
+            buckets[qtype].append(q)
+        else:  # pragma: no cover - defensive; infer only returns known types
+            extras.append((qtype, q))
+
+    ordered: list[tuple[str, dict[str, Any]]] = []
+    for qtype, _ in _QUESTION_SECTIONS:
+        ordered.extend((qtype, q) for q in buckets[qtype])
+    ordered.extend(extras)
+    return ordered
+
+
 def _render_questions(questions: list[dict[str, Any]]) -> str:
+    ordered = _ordered_questions(questions)
+    section_labels = dict(_QUESTION_SECTIONS)
+    counts: dict[str, int] = {}
+    for qtype, _ in ordered:
+        counts[qtype] = counts.get(qtype, 0) + 1
+
     parts: list[str] = []
-    for i, q in enumerate(questions, start=1):
-        text = html.escape(str(q.get("text", "")))
-        options = q.get("options")
-        if options:
-            body = _render_mcq(options)
-        else:
-            body = _render_answer_space()
-        parts.append(
-            f'<div class="ws-question-card">'
-            f'  <div class="ws-question-header">'
-            f'    <div class="ws-question-num-badge">{i}</div>'
-            f'    <div class="ws-question-text">{text}</div>'
-            f"  </div>"
-            f"  {body}"
-            f"</div>"
-        )
+    current_type: str | None = None
+    for number, (qtype, q) in enumerate(ordered, start=1):
+        if qtype != current_type:
+            current_type = qtype
+            heading = html.escape(section_labels.get(qtype, "Questions"))
+            parts.append(
+                f'<h3 class="ws-qtype-header">{heading}'
+                f'<span class="ws-qtype-count">{counts[qtype]}</span></h3>'
+            )
+        parts.append(_render_question_card(number, qtype, q))
     return "\n".join(parts)
+
+
+def _render_question_card(number: int, qtype: str, q: dict[str, Any]) -> str:
+    text = html.escape(str(q.get("text", "")))
+    if qtype == "mcq":
+        body = _render_mcq(q.get("options") or [])
+    elif qtype == "truefalse":
+        body = _render_truefalse()
+    elif qtype == "fill":
+        body = ""  # the ____ gap sits inline in the question text
+    else:  # short-answer and any fallback
+        body = _render_answer_space()
+    return (
+        f'<div class="ws-question-card">'
+        f'  <div class="ws-question-header">'
+        f'    <div class="ws-question-num-badge">{number}</div>'
+        f'    <div class="ws-question-text">{text}</div>'
+        f"  </div>"
+        f"  {body}"
+        f"</div>"
+    )
 
 
 def _render_mcq(options: list[Any]) -> str:
     items: list[str] = []
     for j, opt in enumerate(options):
         label = chr(65 + j)
+        text = html.escape(_strip_option_label(str(opt)))
         items.append(
             f'<div class="ws-mcq-option">'
             f'  <span class="ws-mcq-marker"></span>'
             f'  <span class="ws-mcq-label">{label}</span>'
-            f"  {html.escape(str(opt))}"
+            f'  <span class="ws-mcq-text">{text}</span>'
             f"</div>"
         )
     return f'<div class="ws-mcq-options">{"".join(items)}</div>'
+
+
+def _render_truefalse() -> str:
+    return (
+        '<div class="ws-tf-options">'
+        '<span class="ws-tf-option"><span class="ws-mcq-marker"></span>True</span>'
+        '<span class="ws-tf-option"><span class="ws-mcq-marker"></span>False</span>'
+        "</div>"
+    )
 
 
 def _render_answer_space(lines: int = 3) -> str:
@@ -246,13 +316,29 @@ def _render_answer_space(lines: int = 3) -> str:
     return f'<div class="ws-answer-space">{line_html * lines}</div>'
 
 
+def _strip_option_label(text: str) -> str:
+    """Remove a leading ``A) ``/``B. ``/``(C) `` style label from an option."""
+    return _OPTION_LABEL_RE.sub("", text).strip()
+
+
+def _format_answer(q: dict[str, Any]) -> str:
+    """Answer-key text: for an MCQ with a letter answer, show the letter and option."""
+    answer = str(q.get("answer", "")).strip()
+    options = q.get("options")
+    if options and len(answer) == 1 and answer.upper() in "ABCD":
+        idx = ord(answer.upper()) - 65
+        if 0 <= idx < len(options):
+            return f"{answer.upper()}) {_strip_option_label(str(options[idx]))}"
+    return answer
+
+
 def _render_answer_key(questions: list[dict[str, Any]]) -> str:
     parts: list[str] = []
-    for i, q in enumerate(questions, start=1):
-        answer = html.escape(str(q.get("answer", "")))
+    for number, (_qtype, q) in enumerate(_ordered_questions(questions), start=1):
+        answer = html.escape(_format_answer(q))
         parts.append(
             f'<div class="ws-answer-item">'
-            f'  <div class="ws-answer-num-badge">{i}</div>'
+            f'  <div class="ws-answer-num-badge">{number}</div>'
             f'  <div class="ws-answer-text">{answer}</div>'
             f"</div>"
         )
@@ -325,51 +411,58 @@ def _stylesheet(*, primary: str, tint: str, dark: str, topic: str, subject_label
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 1in 1in 1.5in 1in;
+      padding: 0.9in;
       box-sizing: border-box;
       text-align: center;
     }}
     .cover-subject {{
-      font-size: 14pt;
+      font-size: 13pt;
       letter-spacing: 6px;
       text-transform: uppercase;
-      font-weight: 300;
+      font-weight: 600;
       opacity: 0.95;
-      margin-bottom: 30px;
+      margin: 0 0 30px 0;
     }}
     .cover-image-frame {{
       background: white;
-      padding: 18px;
-      border-radius: 10px;
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-      margin-bottom: 35px;
+      padding: 16px;
+      border-radius: 12px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+      margin: 0 0 34px 0;
+      width: 4.4in;
+      height: 4.4in;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }}
     .cover-image-frame img {{
       display: block;
-      max-width: 4.2in;
-      max-height: 4.2in;
-      border-radius: 4px;
-    }}
-    .cover-image-placeholder {{
-      width: 4in;
-      height: 3in;
-      background: rgba(255, 255, 255, 0.15);
-      border: 2px dashed rgba(255, 255, 255, 0.5);
+      max-width: 100%;
+      max-height: 100%;
       border-radius: 6px;
     }}
+    .cover-image-placeholder {{
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.15);
+      border: 2px dashed rgba(255, 255, 255, 0.55);
+      border-radius: 8px;
+    }}
     .cover-title {{
-      font-size: 34pt;
+      font-size: 30pt;
       font-weight: 700;
-      line-height: 1.15;
-      margin: 0 0 25px 0;
+      line-height: 1.2;
+      max-width: 6.5in;
+      margin: 0 0 26px 0;
       text-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
     }}
     .cover-grade-badge {{
       background: white;
       color: {primary};
       font-weight: 700;
-      font-size: 13pt;
-      padding: 8px 28px;
+      font-size: 12.5pt;
+      padding: 9px 30px;
       border-radius: 999px;
       letter-spacing: 1px;
       box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
@@ -482,22 +575,49 @@ def _stylesheet(*, primary: str, tint: str, dark: str, topic: str, subject_label
       padding-top: 5px;
     }}
 
+    /* ---- Question-type sub-headers ---- */
+    .ws-qtype-header {{
+      font-size: 12.5pt;
+      font-weight: 700;
+      color: {dark};
+      margin: 22px 0 2px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+    .ws-qtype-count {{
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: white;
+      background: {primary};
+      border-radius: 999px;
+      padding: 2px 11px;
+      letter-spacing: 0.3px;
+    }}
+
     /* ---- MCQ options ---- */
     .ws-mcq-options {{
-      margin-top: 10px;
+      margin-top: 12px;
       margin-left: 42px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px 22px;
     }}
     .ws-mcq-option {{
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 5px 0;
+      gap: 11px;
+      padding: 9px 14px;
       font-size: 10.5pt;
+      background: {tint};
+      border: 1px solid {tint};
+      border-radius: 7px;
     }}
     .ws-mcq-marker {{
       display: inline-block;
       width: 16px;
       height: 16px;
+      background: white;
       border: 2px solid {primary};
       border-radius: 4px;
       flex-shrink: 0;
@@ -505,7 +625,29 @@ def _stylesheet(*, primary: str, tint: str, dark: str, topic: str, subject_label
     .ws-mcq-label {{
       font-weight: 700;
       color: {primary};
-      margin-right: 4px;
+      flex-shrink: 0;
+    }}
+    .ws-mcq-text {{
+      flex: 1;
+    }}
+
+    /* ---- True / False options ---- */
+    .ws-tf-options {{
+      margin-top: 12px;
+      margin-left: 42px;
+      display: flex;
+      gap: 18px;
+    }}
+    .ws-tf-option {{
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 22px;
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: {dark};
+      background: {tint};
+      border-radius: 7px;
     }}
 
     /* ---- Short-answer writing space ---- */

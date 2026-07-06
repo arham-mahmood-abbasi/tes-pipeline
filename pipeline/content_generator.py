@@ -1,60 +1,82 @@
 """Generate worksheet body (concept + questions) via Gemini JSON mode.
 
 Per spec §6.1 each subject cycles through three format profiles, selected by
-``day_of_year % 3``. The format profile materially changes the structure of
-the worksheet the model is asked to produce, so the daily output stays varied
-even though the persona and task scaffolding are fixed.
+``day_of_year % 3``. The format profile varies the *concept* style (passage,
+diagram, investigation, worked example, and so on) so the daily output stays
+fresh, while the question set is fixed: every worksheet carries a full bank of
+40 questions split evenly across four types (see :data:`QUESTION_TYPES`).
 """
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from pipeline import content_cleaner, gemini_api_helper, personas
 
 VALID_SUBJECTS: frozenset[str] = frozenset({"science", "math", "english"})
 VALID_FORMAT_PROFILES: frozenset[int] = frozenset({0, 1, 2})
 
+# The four question groups every worksheet must contain, in the order they are
+# presented, and how many of each. These are the single source of truth: the
+# prompt, the normaliser, the validator, and the PDF renderers all key off them.
+QUESTION_TYPES: tuple[str, ...] = ("mcq", "short", "truefalse", "fill")
+REQUIRED_PER_TYPE: int = 10
+
+# Human phrasings the model sometimes emits for the ``type`` field. Mapped back
+# to our canonical keys so a stray "Multiple Choice" doesn't fail validation.
+_TYPE_ALIASES: dict[str, str] = {
+    "mcq": "mcq",
+    "multiple choice": "mcq",
+    "multiple-choice": "mcq",
+    "multiplechoice": "mcq",
+    "short": "short",
+    "short answer": "short",
+    "short-answer": "short",
+    "free": "short",
+    "free-response": "short",
+    "truefalse": "truefalse",
+    "true/false": "truefalse",
+    "true false": "truefalse",
+    "true-false": "truefalse",
+    "tf": "truefalse",
+    "fill": "fill",
+    "fill in the blank": "fill",
+    "fill-in-the-blank": "fill",
+    "fillintheblank": "fill",
+    "blank": "fill",
+}
+
 
 _FORMAT_PROFILE_BRIEFS: dict[tuple[str, int], str] = {
     ("science", 0): (
-        "Concept overview (150-250 words) followed by 5-8 applied questions "
-        "(mix of MCQs with 4 options and short-answer)."
+        "Concept overview (150-220 words) explaining the topic clearly with a "
+        "real-world example a child would recognise."
     ),
     ("science", 1): (
-        "Describe a diagram in words, then ask students to label parts or "
-        "predict what happens; 5-8 questions, mostly short-answer."
+        "Describe a labelled diagram in words (150-220 words) so students can "
+        "picture the parts and how they fit together."
     ),
     ("science", 2): (
-        "Investigation style: pose a hypothesis, describe a simple test, ask "
-        "students to predict, test, and explain. 5-8 questions, mostly "
-        "short-answer."
+        "Investigation style (150-220 words): pose a question, describe a "
+        "simple test, and explain what to look out for."
     ),
-    ("math", 0): (
-        "One worked example followed by 5-8 practice problems progressing "
-        "from easier to harder. Mix of MCQs with 4 options and calculation "
-        "problems."
-    ),
+    ("math", 0): ("Concept overview with one fully worked example, step by step (150-220 words)."),
     ("math", 1): (
-        "Word problems only. 5-8 problems anchored in real-life scenarios "
-        "(shopping, sport, cooking). Show your working space."
+        "Explain the topic through real-life word problems (shopping, sport, "
+        "cooking) in 150-220 words."
     ),
     ("math", 2): (
-        "Mixed review across the topic's varied operations. 5-8 questions, "
-        "mix of calculation and multiple choice."
+        "Concept overview covering the topic's varied operations with short "
+        "examples (150-220 words)."
     ),
     ("english", 0): (
-        "Short reading passage (200-250 words) followed by 5-8 comprehension "
-        "questions. Mix of MCQs with 4 options and short-answer."
+        "Short reading passage (180-220 words) that the comprehension questions below will draw on."
     ),
-    ("english", 1): (
-        "Grammar focus. Explain the rule in 150-200 words, then 5-8 practice "
-        "items (identify, correct, fill the blank)."
-    ),
+    ("english", 1): ("Grammar focus. Explain the rule clearly with examples (150-220 words)."),
     ("english", 2): (
-        "Vocabulary block (8-10 target words with definitions and example "
-        "sentences) followed by 5-8 questions including one creative-writing "
-        "prompt."
+        "Vocabulary overview: introduce 8-10 target words with their meanings "
+        "woven into a 150-220 word explanation."
     ),
 }
 
@@ -76,8 +98,11 @@ def generate_worksheet_content(
 ) -> dict:
     """Return a dict with ``concept`` and ``questions`` keys.
 
-    ``questions`` is a list of ``{text, options, answer}`` dicts where
-    ``options`` is either a 4-element list (MCQ) or ``None`` (free-response).
+    ``questions`` is a list of ``{type, text, options, answer}`` dicts. ``type``
+    is one of :data:`QUESTION_TYPES`; ``options`` is a 4-element list of the
+    written-out answer choices for ``mcq`` questions and ``None`` for every
+    other type. A well-formed worksheet holds :data:`REQUIRED_PER_TYPE` of each
+    type (40 questions total); the returned list is normalised toward that shape.
     """
     if subject not in VALID_SUBJECTS:
         raise ValueError(f"subject must be one of {sorted(VALID_SUBJECTS)}; got {subject!r}")
@@ -97,10 +122,51 @@ def generate_worksheet_content(
     if not isinstance(payload, dict):
         raise ContentGenerationError(f"Expected JSON object, got {type(payload).__name__}")
 
-    return content_cleaner.clean_dict(payload)
+    cleaned = content_cleaner.clean_dict(payload)
+    raw_questions = cleaned.get("questions")
+    cleaned["questions"] = _normalize_questions(
+        raw_questions if isinstance(raw_questions, list) else []
+    )
+    return cleaned
 
 
 # ---- internal helpers ----------------------------------------------------
+
+
+def infer_question_type(question: dict[str, Any]) -> str:
+    """Map a question to one of :data:`QUESTION_TYPES`.
+
+    Uses the model-supplied ``type`` field (canonicalising common phrasings),
+    falling back to structure: anything with options is an MCQ, otherwise it is
+    treated as short-answer. Shared with the renderers so the PDF groups the
+    same way the validator counts.
+    """
+    declared = str(question.get("type", "")).strip().lower()
+    if declared in _TYPE_ALIASES:
+        return _TYPE_ALIASES[declared]
+    if question.get("options"):
+        return "mcq"
+    return "short"
+
+
+def _normalize_questions(questions: list[Any]) -> list[dict[str, Any]]:
+    """Tag every question with a canonical ``type`` and cap each type at 10.
+
+    The model occasionally overshoots (11-12 of a type); trimming the surplus
+    keeps a lightly-over response valid instead of forcing a full regenerate.
+    Under-counts are left as-is so the validator can catch them and retry.
+    """
+    normalized: list[dict[str, Any]] = []
+    counts: dict[str, int] = dict.fromkeys(QUESTION_TYPES, 0)
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        qtype = infer_question_type(q)
+        if counts.get(qtype, 0) >= REQUIRED_PER_TYPE:
+            continue  # trim overshoot for this type
+        normalized.append({**q, "type": qtype})
+        counts[qtype] = counts.get(qtype, 0) + 1
+    return normalized
 
 
 def _build_prompt(*, subject: str, topic: str, grade: int, format_profile: int) -> str:
@@ -110,18 +176,37 @@ def _build_prompt(*, subject: str, topic: str, grade: int, format_profile: int) 
 
     task_block = (
         f"Write a {grade_label} {subject} worksheet about the topic: {topic!r}.\n\n"
-        f"Format profile for today: {format_brief}\n\n"
+        f"Concept style for today: {format_brief}\n\n"
+        "The worksheet must contain exactly 40 questions, split into four "
+        "groups of 10:\n"
+        '- 10 multiple-choice questions (type "mcq"), each with exactly 4 '
+        "options.\n"
+        '- 10 short-answer questions (type "short").\n'
+        '- 10 true/false questions (type "truefalse").\n'
+        '- 10 fill-in-the-blank questions (type "fill"), each showing the gap '
+        "as ____ (four underscores) inside the sentence.\n\n"
         "Output a single JSON object with this exact shape:\n"
         "{\n"
         '  "concept": "<the explanation or passage>",\n'
         '  "questions": [\n'
-        '    {"text": "<question>", "options": ["A","B","C","D"], "answer": "<letter>"},\n'
-        '    {"text": "<short-answer question>", "options": null, "answer": "<expected answer>"}\n'
+        '    {"type": "mcq", "text": "<question>", '
+        '"options": ["<full answer one>", "<full answer two>", '
+        '"<full answer three>", "<full answer four>"], "answer": "<A, B, C or D>"},\n'
+        '    {"type": "short", "text": "<question>", "options": null, '
+        '"answer": "<expected answer>"},\n'
+        '    {"type": "truefalse", "text": "<statement>", "options": null, '
+        '"answer": "True or False"},\n'
+        '    {"type": "fill", "text": "<sentence with ____ gap>", '
+        '"options": null, "answer": "<word that fills the gap>"}\n'
         "  ]\n"
         "}\n\n"
         "Rules:\n"
-        "- 5 to 8 questions total.\n"
-        "- Every MCQ must have exactly 4 options.\n"
+        "- Exactly 10 questions of each type; 40 in total.\n"
+        "- MCQ options must be the real answer choices spelled out in full. "
+        'Never use bare letters like "A" as an option, and never prefix an '
+        'option with its own letter (no "A) ...", no "B. ...").\n'
+        '- Each MCQ "answer" is just the letter (A, B, C or D) of the correct '
+        "option.\n"
         "- Every question must have a non-empty answer in the same object.\n"
         "- Do not include any prose outside the JSON object."
     )

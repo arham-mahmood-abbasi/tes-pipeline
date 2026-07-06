@@ -187,7 +187,7 @@ def _validate_content_only(content: dict[str, Any]) -> validator.ValidationResul
     }
     content_only_checks: list[Callable[[dict], validator.ValidationResult]] = [
         validator.check_concept_word_count,
-        validator.check_question_count,
+        validator.check_question_type_counts,
         validator.check_mcq_options,
         validator.check_answer_keys,
     ]
